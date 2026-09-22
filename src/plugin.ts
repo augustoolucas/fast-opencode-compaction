@@ -26,10 +26,10 @@ import {
 } from "fast-jev-compaction";
 import type { CallDecision, ToolCall } from "fast-jev-compaction";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { applyDecisions, TRUNCATION_PREFIX } from "./apply.js";
 import { toLibraryMessages } from "./adapter.js";
+import { createTelemetry, stateDirectory, type RunRecord, type Telemetry } from "./telemetry.js";
 import {
   createAsker,
   resolveProviderConfig,
@@ -45,9 +45,6 @@ const TRUNCATE_HEAD_CHARS = 300;
 
 /** Hard ceiling on decision requests per day, matching the reference port. */
 const DAILY_REQUEST_CAP = 200;
-
-/** Overrides where the daily usage file lives. */
-const STATE_DIR_ENV = "FAST_OPENCODE_COMPACTION_STATE_DIR";
 
 /** File inside the state dir that tracks today's reservations. */
 const USAGE_FILE = "usage.json";
@@ -78,6 +75,7 @@ interface PluginState {
   /** `tool_use_id` → action. Monotonic: a dropped call is never asked about again. */
   readonly memo: Map<string, CallDecision["action"]>;
   readonly stats: CompactionStats;
+  readonly telemetry: Telemetry;
 }
 
 function emptyStats(): CompactionStats {
@@ -118,13 +116,6 @@ function usageDay(date = new Date()): string {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${date.getFullYear()}-${month}-${day}`;
-}
-
-function stateDirectory(): string {
-  return (
-    process.env[STATE_DIR_ENV] ||
-    join(homedir(), ".local", "share", "opencode", "fast-opencode-compaction")
-  );
 }
 
 /**
@@ -224,15 +215,37 @@ function memoDecisions(state: PluginState, calls: readonly ToolCall[]): CallDeci
 async function onContext(state: PluginState, event: SessionContext): Promise<void> {
   const started = Date.now();
   state.stats.runs += 1;
+  state.telemetry.trace(`context called session=${event.sessionID}`);
+
+  const run: RunRecord = {
+    reason: "step",
+    stage: "",
+    tokensBefore: 0,
+    tokensAfter: 0,
+    tokensSaved: 0,
+    calls: 0,
+    dropped: 0,
+    truncated: 0,
+    requests: 0,
+    ms: 0,
+    rerunAfterDrop: 0,
+    rerunAfterTruncate: 0,
+  };
 
   try {
-    const tokensBefore = estimateRequestTokens(event);
-    if (tokensBefore < state.config.thresholdTokens) return;
+    run.tokensBefore = estimateRequestTokens(event);
+    if (run.tokensBefore < state.config.thresholdTokens) {
+      state.telemetry.trace(
+        `below threshold tokens=${run.tokensBefore} threshold=${state.config.thresholdTokens}`,
+      );
+      return;
+    }
 
     const { messages: library, source } = toLibraryMessages(event.messages);
     const calls = collectToolCalls(library, state.config.preserveRecent);
     state.stats.calls += calls.length;
-    state.stats.tokensBefore += tokensBefore;
+    state.stats.tokensBefore += run.tokensBefore;
+    run.calls = calls.length;
 
     const candidates = calls.filter(
       (call) => !call.pinned && !state.memo.has(call.tool_use_id),
@@ -245,21 +258,27 @@ async function onContext(state: PluginState, event: SessionContext): Promise<voi
         preserveRecentMessages: state.config.preserveRecent,
       });
       state.stats.stage = fitted.stage;
+      run.stage = fitted.stage;
 
       const batches = batchCalls(candidates, fitted.tokens, {
         maxRequestTokens: state.config.maxRequestTokens,
       });
       const allowed = reserveRequests(batches.length);
       const asker = askerFor(state, event.sessionID);
+      state.telemetry.trace(
+        `candidates=${candidates.length} batches=${batches.length} allowed=${allowed}`,
+      );
 
       for (const batch of batches.slice(0, allowed)) {
         try {
           const questions = Object.assign({}, ...batch.map((call) => questionsFor(call)));
           const answers = await asker.ask(fitted.state, questions);
+          run.requests += 1;
           state.stats.requests += 1;
           rememberAnswers(state, batch, answers);
         } catch (error) {
           state.stats.failures += 1;
+          state.telemetry.trace(`decision request failed: ${errorText(error)}`);
           warnOnce(
             "plugin:decision-failed",
             `fast-opencode-compaction: a decision request failed and the request was left untouched (${errorText(error)})`,
@@ -273,19 +292,28 @@ async function onContext(state: PluginState, event: SessionContext): Promise<voi
     const applied = applyDecisions(event.messages, source, calls, memoDecisions(state, calls), TRUNCATE_HEAD_CHARS);
     state.stats.dropped += applied.dropped;
     state.stats.truncated += applied.truncated;
+    run.dropped = applied.dropped;
+    run.truncated = applied.truncated;
 
-    const tokensAfter =
-      applied.dropped + applied.truncated > 0 ? estimateRequestTokens(event) : tokensBefore;
-    state.stats.tokensAfter += tokensAfter;
-    state.stats.tokensSaved += Math.max(0, tokensBefore - tokensAfter);
+    run.tokensAfter =
+      applied.dropped + applied.truncated > 0 ? estimateRequestTokens(event) : run.tokensBefore;
+    run.tokensSaved = Math.max(0, run.tokensBefore - run.tokensAfter);
+    state.stats.tokensAfter += run.tokensAfter;
+    state.stats.tokensSaved += run.tokensSaved;
+    state.telemetry.trace(
+      `applied dropped=${run.dropped} truncated=${run.truncated} requests=${run.requests}`,
+    );
   } catch (error) {
     state.stats.failures += 1;
+    state.telemetry.trace(`context hook failed: ${errorText(error)}`);
     warnOnce(
       "plugin:context-failed",
       `fast-opencode-compaction: the context hook failed and the request was left untouched (${errorText(error)})`,
     );
   } finally {
-    state.stats.ms += Date.now() - started;
+    run.ms = Date.now() - started;
+    state.stats.ms += run.ms;
+    state.telemetry.record(event.sessionID, run);
   }
 }
 
@@ -294,6 +322,7 @@ async function onContext(state: PluginState, event: SessionContext): Promise<voi
  * truncation marker were shortened on purpose, so they are not evidence that a tool failed.
  */
 function onCompaction(state: PluginState, event: SessionCompaction): void {
+  const started = Date.now();
   try {
     event.system.push({
       type: "text",
@@ -302,12 +331,30 @@ function onCompaction(state: PluginState, event: SessionCompaction): void {
         `to save context. They carry a "${TRUNCATION_PREFIX}…]" note and are not tool failures: ` +
         "re-run the tool if the full output is needed.",
     });
+    state.telemetry.trace(`compaction note appended session=${event.sessionID}`);
   } catch (error) {
     state.stats.failures += 1;
     warnOnce(
       "plugin:compaction-failed",
       `fast-opencode-compaction: the compaction note could not be added (${errorText(error)})`,
     );
+  } finally {
+    // The compaction hook prunes nothing, so this run never reaches the ledger: recording it just
+    // keeps the counters honest about how often the note was delivered.
+    state.telemetry.record(event.sessionID, {
+      reason: "compaction",
+      stage: "",
+      tokensBefore: 0,
+      tokensAfter: 0,
+      tokensSaved: 0,
+      calls: 0,
+      dropped: 0,
+      truncated: 0,
+      requests: 0,
+      ms: Date.now() - started,
+      rerunAfterDrop: 0,
+      rerunAfterTruncate: 0,
+    });
   }
 }
 
@@ -330,6 +377,7 @@ export async function setup(ctx: Plugin.Context): Promise<void> {
     askers: new Map(),
     memo: new Map(),
     stats: emptyStats(),
+    telemetry: createTelemetry(),
   };
 
   await ctx.session.hook("context", (event) => onContext(state, event));
