@@ -107,6 +107,50 @@ export interface TelemetryDecision {
   readonly id: string;
 }
 
+/** Who produced a run: the resolved provider preset and the model it points at. */
+export interface TelemetryIdentity {
+  readonly provider: string;
+  readonly model: string;
+}
+
+/** Fallback identity when a caller does not name one; the plugin always does. */
+const UNKNOWN_IDENTITY: TelemetryIdentity = { provider: "unknown", model: "unknown" };
+
+/** Per-provider bucket in `stats.json`, keyed `"<provider>:<model>"`. */
+export interface ProviderBucket {
+  runs: number;
+  changed: number;
+  dropped: number;
+  truncated: number;
+  requests: number;
+  tokensSaved: number;
+  rerunAfterDrop: number;
+  rerunAfterTruncate: number;
+}
+
+function bucketZeros(): ProviderBucket {
+  return {
+    runs: 0,
+    changed: 0,
+    dropped: 0,
+    truncated: 0,
+    requests: 0,
+    tokensSaved: 0,
+    rerunAfterDrop: 0,
+    rerunAfterTruncate: 0,
+  };
+}
+
+/** Adds a bucket's worth of numbers onto a copy of `target`; junk values count as zero. */
+function addBucket(target: ProviderBucket, delta: Partial<ProviderBucket>): ProviderBucket {
+  const merged = { ...target };
+  for (const key of Object.keys(merged) as Array<keyof ProviderBucket>) {
+    const value = delta[key];
+    merged[key] += typeof value === "number" && Number.isFinite(value) ? value : 0;
+  }
+  return merged;
+}
+
 /** What the plugin needs from telemetry. */
 export interface Telemetry {
   /** Counts re-runs of calls pruned earlier. Call this BEFORE applying this run's decisions. */
@@ -157,14 +201,18 @@ function errorText(error: unknown): string {
 export function createTelemetry(
   directory: string = stateDirectory(),
   nowMs: () => number = Date.now,
+  identity: TelemetryIdentity = UNKNOWN_IDENTITY,
 ): Telemetry {
   const ledgerPath = join(directory, LEDGER_FILE);
   const rotatedPath = join(directory, LEDGER_ROTATED_FILE);
   const statsPath = join(directory, STATS_FILE);
   const debugPath = join(directory, DEBUG_FILE);
+  /** The bucket every record lands in, in `stats.json`. */
+  const bucketKey = `${identity.provider}:${identity.model}`;
 
   /** Deltas since the last flush, and when that flush happened. */
   let pending = zeros();
+  let pendingByProvider = new Map<string, ProviderBucket>();
   let lastFlushMs = 0;
 
   /** Per session: the signatures of the calls this plugin dropped or truncated, by call id. */
@@ -201,9 +249,16 @@ export function createTelemetry(
     mkdirSync(directory, { recursive: true });
 
     let existing: Partial<Counters> = {};
+    let existingBuckets: Record<string, Partial<ProviderBucket>> = {};
     try {
       const parsed = JSON.parse(readFileSync(statsPath, "utf8")) as unknown;
-      if (parsed !== null && typeof parsed === "object") existing = parsed as Partial<Counters>;
+      if (parsed !== null && typeof parsed === "object") {
+        existing = parsed as Partial<Counters>;
+        const buckets = (parsed as { byProvider?: unknown }).byProvider;
+        if (buckets !== null && typeof buckets === "object") {
+          existingBuckets = buckets as Record<string, Partial<ProviderBucket>>;
+        }
+      }
     } catch {
       // missing or unreadable: this flush starts from zero
     }
@@ -214,10 +269,19 @@ export function createTelemetry(
       merged[key] = (typeof previous === "number" && Number.isFinite(previous) ? previous : 0) + value;
     }
 
+    // Per-provider buckets merge the same way: what the file holds, plus this process's deltas.
+    const byProvider: Record<string, ProviderBucket> = {};
+    for (const [key, bucket] of Object.entries(existingBuckets)) {
+      if (bucket !== null && typeof bucket === "object") byProvider[key] = addBucket(bucketZeros(), bucket);
+    }
+    for (const [key, delta] of pendingByProvider) {
+      byProvider[key] = addBucket(byProvider[key] ?? bucketZeros(), delta);
+    }
+
     const temp = `${statsPath}.${process.pid}.tmp`;
     writeFileSync(
       temp,
-      `${JSON.stringify({ ...merged, updatedAt: new Date(nowMs()).toISOString() }, null, 2)}\n`,
+      `${JSON.stringify({ ...merged, byProvider, updatedAt: new Date(nowMs()).toISOString() }, null, 2)}\n`,
       { mode: 0o600 },
     );
     renameSync(temp, statsPath);
@@ -289,11 +353,28 @@ export function createTelemetry(
         pending.ms += run.ms;
         if (changed) pending.changed += 1;
 
+        pendingByProvider.set(
+          bucketKey,
+          addBucket(pendingByProvider.get(bucketKey) ?? bucketZeros(), {
+            runs: 1,
+            changed: changed ? 1 : 0,
+            dropped: run.dropped,
+            truncated: run.truncated,
+            requests: run.requests,
+            tokensSaved: run.tokensSaved,
+            rerunAfterDrop: run.rerunAfterDrop,
+            rerunAfterTruncate: run.rerunAfterTruncate,
+          }),
+        );
+
         if (changed) {
           appendLedger(
             JSON.stringify({
               at: new Date(nowMs()).toISOString(),
               session,
+              // Who produced this line; the plugin passes the resolved identity at creation.
+              provider: identity.provider,
+              model: identity.model,
               reason: run.reason,
               stage: run.stage,
               tokensBefore: run.tokensBefore,
@@ -315,6 +396,7 @@ export function createTelemetry(
         if (lastFlushMs === 0 || stamp - lastFlushMs >= FLUSH_INTERVAL_MS) {
           writeCounters();
           pending = zeros();
+          pendingByProvider = new Map();
           lastFlushMs = stamp;
         }
       } catch (error) {
@@ -336,6 +418,7 @@ export function createTelemetry(
       try {
         writeCounters();
         pending = zeros();
+        pendingByProvider = new Map();
         lastFlushMs = nowMs();
       } catch (error) {
         fail(error);

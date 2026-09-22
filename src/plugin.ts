@@ -384,7 +384,10 @@ export async function setup(ctx: Plugin.Context): Promise<void> {
     askers: new Map(),
     memo: new Map(),
     stats: emptyStats(),
-    telemetry: createTelemetry(),
+    telemetry: createTelemetry(stateDirectory(), Date.now, {
+      provider: config.provider,
+      model: config.model,
+    }),
   };
 
   await ctx.session.hook("context", (event) => onContext(state, event));

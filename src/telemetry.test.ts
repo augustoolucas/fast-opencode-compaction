@@ -87,6 +87,9 @@ describe("ledger and counters", () => {
       {
         at: "2026-09-22T12:00:00.000Z",
         session: "ses_1",
+        // No identity was passed to createTelemetry here, so the fallback is stamped.
+        provider: "unknown",
+        model: "unknown",
         reason: "step",
         stage: "full",
         tokensBefore: 100,
