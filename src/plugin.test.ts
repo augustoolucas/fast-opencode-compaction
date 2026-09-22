@@ -161,6 +161,19 @@ function assertPaired(messages: readonly V2Message[]): void {
 }
 
 describe("plugin setup", () => {
+  it("stays silent when disabled through options: no hooks and no warning", async () => {
+    vi.stubEnv("TYPESAFE_API_KEY", "");
+    vi.stubEnv("OPENCODE_API_KEY", "");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { ctx, hooks } = fakeContext({ enabled: false });
+
+    await setup(ctx);
+
+    expect(hooks.context).toBeUndefined();
+    expect(hooks.compaction).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("stays off and says so when no provider is configured", async () => {
     vi.stubEnv("TYPESAFE_API_KEY", "");
     vi.stubEnv("OPENCODE_API_KEY", "");

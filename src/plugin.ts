@@ -367,15 +367,20 @@ function onCompaction(state: PluginState, event: SessionCompaction): void {
 
 /**
  * Registers the hooks unless no decision endpoint is configured, in which case the plugin stays off
- * and says so once. `setup` runs once per process (task 02), so the memo and the counters live here.
+ * and says so once. `enabled: false` is the deliberate off switch: no hooks and no warning at all.
+ * `setup` runs once per process (task 02), so the memo and the counters live here.
  */
 export async function setup(ctx: Plugin.Context): Promise<void> {
-  const config = resolveProviderConfig(ctx.options as ProviderConfig, process.env);
+  const options = (ctx.options ?? {}) as ProviderConfig;
+  const config = resolveProviderConfig(options, process.env);
   if (!config) {
-    warnOnce(
-      "plugin:not-configured",
-      "fast-opencode-compaction: no decision endpoint configured (set TYPESAFE_API_KEY or OPENCODE_API_KEY, or pass a provider option); the plugin stays off",
-    );
+    // Only a genuinely unconfigured plugin warns; a disabled one is silent by design.
+    if (options.enabled !== false) {
+      warnOnce(
+        "plugin:not-configured",
+        "fast-opencode-compaction: no decision endpoint configured (set TYPESAFE_API_KEY or OPENCODE_API_KEY, or pass a provider option); the plugin stays off",
+      );
+    }
     return;
   }
 
