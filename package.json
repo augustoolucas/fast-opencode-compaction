@@ -16,7 +16,8 @@
     "fast-jev-compaction": "^0.4.0"
   },
   "devDependencies": {
-    "@opencode/plugin": "2.0.12",
+    "@opencode/ai": "2.0.14",
+    "@opencode/plugin": "2.0.14",
     "@types/node": "^24.13.6",
     "typescript": "^7.0.2",
     "vitest": "^5.0.1"
