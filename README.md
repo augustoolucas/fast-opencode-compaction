@@ -126,7 +126,7 @@ Every option is optional. Options come from the plugin entry's `options` object 
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `provider` | auto-detected | `typesafe`, `zen` or `custom`. Required for `custom`. |
+| `provider` | auto-detected | `typesafe`, `zen`, `openrouter`, `vercel` or `custom`. Required for `custom`, `openrouter` and `vercel`. |
 | `baseUrl` | per provider | Endpoint; must speak [PROTOCOL.md](./PROTOCOL.md). |
 | `model` | per provider | Decision model name sent in the request body. |
 | `apiKey` | — | Inline key; wins over `apiKeyEnv` and `apiKeyCommand`. |
@@ -153,7 +153,22 @@ Every option is optional. Options come from the plugin entry's `options` object 
 | `maxRequestTokens` | `30000` | `30000` | `1200` |
 
 Auto-detection order: `TYPESAFE_API_KEY`, then `OPENCODE_API_KEY`. A `baseUrl`/`model` without a
-`provider` is not enough — name `custom` explicitly.
+`provider` is not enough — name `custom` explicitly, and the aggregator presets below have to be named
+too (their keys are never auto-detected).
+
+### Aggregator presets
+
+Both speak System One with the same budgets and threshold as TypeSafe (`60000` / `25000` / `30000`) and
+the same `Authorization: Bearer`. The endpoint constants come from [Jevvy](https://github.com/PanAchy/jevvy)
+(MIT) — **we have no key for either route, so neither is exercised live by us.**
+
+| Provider | `baseUrl` | `model` | `apiKeyEnv` |
+| --- | --- | --- | --- |
+| `openrouter` | `https://openrouter.ai/api/v1/systemone` | `typesafe/jev-1.13` | `OPENROUTER_API_KEY` |
+| `vercel` | `https://ai-gateway.vercel.sh/typesafe/v1/systemone` | `typesafe-ai/jev` | `AI_GATEWAY_API_KEY` |
+
+Anything else that speaks the protocol is `custom` — see
+[docs/provider-recipes.md](./docs/provider-recipes.md).
 
 ## Providers
 
@@ -235,12 +250,12 @@ wherever `FAST_OPENCODE_COMPACTION_STATE_DIR` points.
 | File | Contents |
 | --- | --- |
 | `ledger.jsonl` | One line per run that changed the request; rotated to `ledger.jsonl.1` at 5 MB. |
-| `stats.json` | Cumulative counters, merged on every write so restarts do not lose history. |
+| `stats.json` | Cumulative counters plus a `byProvider` map, merged on every write so restarts do not lose history. |
 | `debug.log` | Verbose trace, only with `FAST_OPENCODE_COMPACTION_DEBUG=1`. |
 
-Ledger fields: `at, session, reason, stage, tokensBefore, tokensAfter, tokensSaved, calls, dropped,
-truncated, requests, ms, rerunAfterDrop, rerunAfterTruncate`. Counts and lengths only — no message
-text, no tool results, no keys.
+Ledger fields: `at, session, provider, model, reason, stage, tokensBefore, tokensAfter, tokensSaved,
+calls, dropped, truncated, requests, ms, rerunAfterDrop, rerunAfterTruncate`. Counts and lengths only
+— no message text, no tool results, no keys.
 
 How to read it:
 
@@ -252,9 +267,15 @@ jq -s '{dropped: map(.dropped) | add, reruns: map(.rerunAfterDrop) | add, saved:
 
 - `tokensSaved` is what the pruning bought you for that request; `stage` says which fitting stage the
   state needed (`full` means it fitted as-is).
+- `provider` and `model` say which endpoint produced the line, and `stats.json` groups the same
+  counters into `byProvider` buckets keyed `"<provider>:<model>"` — that is what makes routes
+  comparable: the free Zen model (`zen:jev-1.13-free`), a paid route, or a local Laya bridge
+  (`custom:laya-typed-decisions`) each get their own `dropped`/`truncated`/`rerunAfterDrop` numbers.
+  The global counters stay alongside them, and both merge across restarts.
 - **`rerunAfterDrop / dropped` is the quality signal.** Every dropped call that later comes back with
   the same tool and input under a new id was a re-run: if that ratio is high, the plugin is pruning
-  things the model needed — lower `keepThreshold` or raise `preserveRecent`.
+  things the model needed — lower `keepThreshold` or raise `preserveRecent`. Compare it per
+  `byProvider` bucket to see which model decides better.
 - `debug.log` is for troubleshooting only; it is off by default.
 
 ## Troubleshooting
@@ -271,6 +292,7 @@ jq -s '{dropped: map(.dropped) | add, reruns: map(.rerunAfterDrop) | add, saved:
 | The plugin does not seem to load | Plugins load per project at session start: start a new session, or restart opencode. |
 | `compact()`/fit errors in `debug.log` | The state does not fit the budgets; raise `maxStateTokens`/`maxRequestTokens`. |
 | Tools keep re-running | `rerunAfterDrop` is high: lower `keepThreshold` (e.g. `0.35`) and keep `preserveRecent` at `2`+. |
+| `ignoring unknown option keys … — check for typos` | One or more option keys in your config are not real options and were ignored; the message names them (e.g. `thresholdToken` instead of `thresholdTokens`). The warning fires once per process. |
 
 ## Development
 

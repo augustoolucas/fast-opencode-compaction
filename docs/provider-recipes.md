@@ -66,6 +66,64 @@ life of the opencode process. This provider keeps the big-context defaults (`thr
   (`https://opencode.ai/zen/go/v1/systemone`) rejects the request (`400 MissingSessionID`) even when
   the plugin sends `x-opencode-session`.
 
+## Aggregator routes
+
+Two aggregators speak the System One protocol at the same model. The endpoint constants come from
+[Jevvy](https://github.com/PanAchy/jevvy) (MIT, `packages/core/src/{openrouter,vercel}.ts`); both use
+the same `Authorization: Bearer` header as TypeSafe and the same budgets/threshold
+(`60000` / `25000` / `30000`).
+
+> **Neither route is exercised live by us** — we have no OpenRouter or Vercel AI Gateway key, so these
+> snippets are configuration recipes, not tested paths. `custom` stays the catch-all for any other
+> System One endpoint.
+
+### OpenRouter
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "fast-opencode-compaction",
+      "options": {
+        "provider": "openrouter",
+        "baseUrl": "https://openrouter.ai/api/v1/systemone",
+        "model": "typesafe/jev-1.13"
+      }
+    }
+  ]
+}
+```
+
+The key is read from `OPENROUTER_API_KEY` by default. The provider has to be named explicitly: the
+auto-detection order stays TypeSafe → Zen, so `OPENROUTER_API_KEY` alone leaves the plugin off (with
+the usual one-line warning).
+
+### Vercel AI Gateway
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "fast-opencode-compaction",
+      "options": {
+        "provider": "vercel",
+        "baseUrl": "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
+        "model": "typesafe-ai/jev"
+      }
+    }
+  ]
+}
+```
+
+The key is read from `AI_GATEWAY_API_KEY` by default, and `provider: "vercel"` is required for the
+same reason as above.
+
+### Anything else
+
+For any other endpoint that implements [PROTOCOL.md](../PROTOCOL.md) — a self-hosted System One, an
+internal gateway, another aggregator — use `provider: "custom"` with an explicit `baseUrl` and
+`model`, and set the budgets to match the model's context. The recipe below is the worked example.
+
 ## Custom: a local Laya bridge
 
 `custom` is for any endpoint you run yourself. It requires `baseUrl` and `model`, and does not need

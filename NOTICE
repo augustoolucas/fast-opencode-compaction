@@ -17,3 +17,10 @@ MIT-licensed projects.
   MIT License.
   The telemetry design, the daily-cap reservation, the small-result rule and the truncation-note
   ideas are adapted from this project.
+
+## Endpoint constants
+
+- **jevvy** — <https://github.com/PanAchy/jevvy>
+  MIT License.
+  The `openrouter` and `vercel` provider presets (`baseUrl`, model name and key environment variable)
+  are taken from `packages/core/src/openrouter.ts` and `packages/core/src/vercel.ts`.
