@@ -13,7 +13,7 @@
  */
 
 import type { Message as V2Message } from "@opencode/ai";
-import type { SessionContext } from "@opencode/plugin/promise/session";
+import type { SessionCompaction, SessionContext } from "@opencode/plugin/promise/session";
 import type { Plugin } from "@opencode/plugin";
 import {
   batchCalls,
@@ -28,7 +28,7 @@ import type { CallDecision, ToolCall } from "fast-jev-compaction";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { applyDecisions } from "./apply.js";
+import { applyDecisions, TRUNCATION_PREFIX } from "./apply.js";
 import { toLibraryMessages } from "./adapter.js";
 import {
   createAsker,
@@ -290,6 +290,28 @@ async function onContext(state: PluginState, event: SessionContext): Promise<voi
 }
 
 /**
+ * The compaction request is a chance to explain the pruning to the model: results carrying the
+ * truncation marker were shortened on purpose, so they are not evidence that a tool failed.
+ */
+function onCompaction(state: PluginState, event: SessionCompaction): void {
+  try {
+    event.system.push({
+      type: "text",
+      text:
+        "Some earlier tool results in this conversation were shortened by fast-opencode-compaction " +
+        `to save context. They carry a "${TRUNCATION_PREFIX}…]" note and are not tool failures: ` +
+        "re-run the tool if the full output is needed.",
+    });
+  } catch (error) {
+    state.stats.failures += 1;
+    warnOnce(
+      "plugin:compaction-failed",
+      `fast-opencode-compaction: the compaction note could not be added (${errorText(error)})`,
+    );
+  }
+}
+
+/**
  * Registers the hooks unless no decision endpoint is configured, in which case the plugin stays off
  * and says so once. `setup` runs once per process (task 02), so the memo and the counters live here.
  */
@@ -311,4 +333,5 @@ export async function setup(ctx: Plugin.Context): Promise<void> {
   };
 
   await ctx.session.hook("context", (event) => onContext(state, event));
+  await ctx.session.hook("compaction", (event) => onCompaction(state, event));
 }
