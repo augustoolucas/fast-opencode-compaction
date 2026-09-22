@@ -1,0 +1,19 @@
+# Notices
+
+`fast-opencode-compaction` is MIT-licensed (see [LICENSE](./LICENSE)) and builds on the following
+MIT-licensed projects.
+
+## Algorithm
+
+- **fast-jev-compaction** — <https://github.com/tamaratran/fast-jev-compaction>
+  MIT License, Copyright (c) 2025.
+  The compaction algorithm is used as the npm dependency `fast-jev-compaction`: the transcript
+  primitives, the Jev request/response handling and the pruning decisions described in
+  [PROTOCOL.md](./PROTOCOL.md).
+
+## Ideas
+
+- **opencode-jev-compaction** — <https://github.com/JLegends/opencode-jev-compaction>
+  MIT License.
+  The telemetry design, the daily-cap reservation, the small-result rule and the truncation-note
+  ideas are adapted from this project.
