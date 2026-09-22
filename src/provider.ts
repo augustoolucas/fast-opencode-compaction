@@ -135,6 +135,33 @@ export interface ProviderConfig {
   enabled?: boolean;
 }
 
+/**
+ * Every key `ProviderConfig` understands. Anything else in the options object is a typo
+ * (`thresholdToken`) or a wrapper's own metadata, and `warnUnknownOptionKeys` names it once.
+ */
+const KNOWN_OPTION_KEYS = [
+  "provider",
+  "baseUrl",
+  "model",
+  "apiKey",
+  "apiKeyEnv",
+  "apiKeyCommand",
+  "headers",
+  "timeoutMs",
+  "thresholdTokens",
+  "keepThreshold",
+  "preserveRecent",
+  "maxStateTokens",
+  "maxRequestTokens",
+  "enabled",
+] as const;
+
+type KnownOptionKey = (typeof KNOWN_OPTION_KEYS)[number];
+
+/** Compile-time guard: the list above must stay in step with `ProviderConfig`. */
+type AssertKeysComplete<T extends never> = T;
+type OptionKeysComplete = AssertKeysComplete<Exclude<keyof ProviderConfig, KnownOptionKey>>;
+
 /** A `ProviderConfig` with every field resolved to a value. */
 export interface ResolvedProviderConfig {
   provider: ProviderName;
@@ -186,15 +213,45 @@ function detectProvider(env: Record<string, string | undefined>): ProviderName |
 }
 
 /**
+ * Warns once about option keys we do not know, sorted and comma-separated. The target is a typo such
+ * as `thresholdToken`, which would otherwise fall back to a default in silence.
+ *
+ * Choice: every unknown key **with a defined value** warns. A key set to `undefined` is not a
+ * configuration attempt, and a wrapper shim passing its own metadata is named once for the life of
+ * the process — a small price for never missing a typo, which is the failure mode this closes.
+ * Resolution is never affected.
+ */
+function warnUnknownOptionKeys(options: ProviderConfig): void {
+  const unknown = Object.keys(options ?? {})
+    .filter((key) => (options as Record<string, unknown>)[key] !== undefined)
+    .filter((key) => !KNOWN_OPTION_KEYS.includes(key as KnownOptionKey))
+    .sort();
+
+  if (unknown.length === 0) return;
+
+  warnOnce(
+    "provider:unknown-option",
+    `fast-opencode-compaction: ignoring unknown option ${
+      unknown.length === 1 ? "key" : "keys"
+    } ${unknown.join(", ")} — check for typos`,
+  );
+}
+
+/**
  * Resolves the endpoint to use, or `undefined` when there is nothing to use: no explicit provider
  * and no known key in the environment, `enabled: false`, or a `custom` provider that is missing its
  * required `baseUrl`/`model` (that last case is also reported through `warnOnce`).
+ *
+ * Unknown option keys are reported once, before anything else, unless the plugin is switched off —
+ * `enabled: false` is meant to be a completely quiet off switch.
  */
 export function resolveProviderConfig(
   options: ProviderConfig = {},
   env: Record<string, string | undefined> = process.env,
 ): ResolvedProviderConfig | undefined {
   if (options.enabled === false) return undefined;
+
+  warnUnknownOptionKeys(options);
 
   const provider = options.provider ?? detectProvider(env);
   if (!provider) return undefined;

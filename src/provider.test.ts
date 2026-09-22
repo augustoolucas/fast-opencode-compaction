@@ -15,6 +15,7 @@ import {
   describeProviderError,
   resolveApiKey,
   resolveProviderConfig,
+  type ProviderConfig,
   type ResolvedProviderConfig,
   type SpawnSyncLike,
 } from "./provider.js";
@@ -220,6 +221,61 @@ describe("resolveProviderConfig", () => {
       maxRequestTokens: 1_200,
       apiKeyEnv: undefined,
     });
+  });
+
+  it("warns once about unknown option keys and still resolves the rest", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const options = {
+      provider: "typesafe",
+      thresholdToken: 4_242, // typo: ignored, so the preset threshold applies
+      zzzWrapperMetadata: true,
+    } as unknown as ProviderConfig;
+
+    const first = resolveProviderConfig(options, {});
+    const second = resolveProviderConfig(options, {});
+
+    // Resolution is untouched by the unknown keys.
+    expect(first).toMatchObject({ provider: "typesafe", thresholdTokens: 60_000 });
+    expect(second).toBeDefined();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const message = String(warn.mock.calls[0]?.[0]);
+    expect(message).toContain("unknown option keys");
+    expect(message).toContain("thresholdToken, zzzWrapperMetadata"); // sorted
+  });
+
+  it("never warns for the known option set, undefined values or a disabled plugin", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(
+      resolveProviderConfig(
+        {
+          provider: "openrouter",
+          baseUrl: "https://example.test/v1/systemone",
+          model: "m",
+          apiKey: "k",
+          apiKeyEnv: "MY_KEY",
+          apiKeyCommand: ["echo", "k"],
+          headers: { "x-test": "1" },
+          timeoutMs: 1_000,
+          thresholdTokens: 1_000,
+          keepThreshold: 0.4,
+          preserveRecent: 2,
+          maxStateTokens: 900,
+          maxRequestTokens: 1_200,
+          enabled: true,
+        },
+        {},
+      ),
+    ).toBeDefined();
+    // A key that is present but undefined is not a configuration attempt.
+    expect(resolveProviderConfig({ provider: "zen", thresholdTokens: undefined }, {})).toBeDefined();
+    // `enabled: false` stays a completely quiet off switch, typo or not.
+    expect(
+      resolveProviderConfig({ enabled: false, thresholdToken: 1 } as unknown as ProviderConfig, {}),
+    ).toBeUndefined();
+
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("refuses an incomplete custom provider and says so once", () => {
