@@ -29,7 +29,7 @@ export interface DecisionAsker {
 }
 
 /** Provider names, used to pick defaults; nothing downstream branches on them. */
-export type ProviderName = "typesafe" | "zen" | "custom";
+export type ProviderName = "typesafe" | "zen" | "openrouter" | "vercel" | "custom";
 
 /** Endpoint, model and budget defaults for one provider. */
 export interface ProviderDefaults {
@@ -63,6 +63,25 @@ export const PROVIDER_DEFAULTS: Record<ProviderName, ProviderDefaults> = {
     baseUrl: "https://opencode.ai/zen/v1/systemone",
     model: "jev-1.13-free",
     apiKeyEnv: "OPENCODE_API_KEY",
+    thresholdTokens: 60_000,
+    maxStateTokens: 25_000,
+    maxRequestTokens: 30_000,
+  },
+  // Aggregator routes that speak System One. Endpoint constants come from PanAchy/jevvy (MIT),
+  // packages/core/src/{openrouter,vercel}.ts; both authenticate with `Authorization: Bearer`, which
+  // is our default. Untested live here: we have no key for either.
+  openrouter: {
+    baseUrl: "https://openrouter.ai/api/v1/systemone",
+    model: "typesafe/jev-1.13",
+    apiKeyEnv: "OPENROUTER_API_KEY",
+    thresholdTokens: 60_000,
+    maxStateTokens: 25_000,
+    maxRequestTokens: 30_000,
+  },
+  vercel: {
+    baseUrl: "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
+    model: "typesafe-ai/jev",
+    apiKeyEnv: "AI_GATEWAY_API_KEY",
     thresholdTokens: 60_000,
     maxStateTokens: 25_000,
     maxRequestTokens: 30_000,

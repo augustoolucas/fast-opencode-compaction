@@ -162,6 +162,52 @@ describe("resolveProviderConfig", () => {
     });
   });
 
+  it("resolves the openrouter preset, keyed by OPENROUTER_API_KEY", () => {
+    const config = resolveProviderConfig({ provider: "openrouter" }, {});
+
+    expect(config).toMatchObject({
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1/systemone",
+      model: "typesafe/jev-1.13",
+      apiKeyEnv: "OPENROUTER_API_KEY",
+      thresholdTokens: 60_000,
+      maxStateTokens: 25_000,
+      maxRequestTokens: 30_000,
+      enabled: true,
+    });
+    // Same bearer-header path as typesafe: no provider-specific header is injected.
+    expect(config?.headers).toEqual({});
+  });
+
+  it("resolves the vercel preset, keyed by AI_GATEWAY_API_KEY", () => {
+    const config = resolveProviderConfig({ provider: "vercel" }, {});
+
+    expect(config).toMatchObject({
+      provider: "vercel",
+      baseUrl: "https://ai-gateway.vercel.sh/typesafe/v1/systemone",
+      model: "typesafe-ai/jev",
+      apiKeyEnv: "AI_GATEWAY_API_KEY",
+      thresholdTokens: 60_000,
+      maxStateTokens: 25_000,
+      maxRequestTokens: 30_000,
+      enabled: true,
+    });
+    expect(config?.headers).toEqual({});
+  });
+
+  it("lets an override win over a preset", () => {
+    const config = resolveProviderConfig(
+      { provider: "openrouter", model: "typesafe/jev-other", thresholdTokens: 1_000 },
+      {},
+    );
+
+    expect(config).toMatchObject({
+      baseUrl: "https://openrouter.ai/api/v1/systemone",
+      model: "typesafe/jev-other",
+      thresholdTokens: 1_000,
+    });
+  });
+
   it("keeps custom's small budgets by default", () => {
     const config = resolveProviderConfig(
       { provider: "custom", baseUrl: "http://127.0.0.1:8080", model: "laya" },
