@@ -140,3 +140,52 @@ provider was given.
   candidate below 0.2, so any single threshold either drops all calls or truncates only by luck — the
   window is thin on a small synthetic session. On a real long session the probabilities spread out;
   the telemetry's `rerunAfterDrop / dropped` ratio is the signal to tune against.
+
+## Follow-up verification (presets, strict options, provider-tagged telemetry)
+
+Local checks after the follow-up changes:
+
+```
+$ npm ci                                   # EXIT 0
+$ npx tsc --noEmit                         # EXIT 0
+$ npx vitest run
+ Test Files  5 passed (5)
+      Tests  66 passed (66)                # 59 before the follow-up; +5 provider, +2 telemetry
+$ npm run build                            # EXIT 0
+$ npm pack --dry-run                       # 26 files, 37.1 kB: LICENSE, NOTICE, PROTOCOL.md, README.md, dist/*, package.json
+```
+
+The new provider presets (`openrouter`, `vercel`) and the unknown-option warning are covered by unit
+tests only: **we have no OpenRouter or Vercel AI Gateway key, so neither route has been exercised
+live.** Their endpoint constants come from Jevvy (MIT) and are recorded in `NOTICE`.
+
+E2E smoke with the existing `spike/e2e` harness (`--standalone --model opencode-go/deepseek-v4.1-flash`,
+prompt: read `README.md` and `docs/provider-recipes.md`, grep `src` for `thresholdTokens`, summarise):
+
+```json
+{"at":"2026-09-22T21:00:03.915Z","session":"ses_f35152b21ffeS18AabhcZofgtg","provider":"zen",
+ "model":"jev-1.13-free","reason":"step","stage":"full","tokensBefore":33655,"tokensAfter":14808,
+ "tokensSaved":18847,"calls":8,"dropped":6,"truncated":1,"requests":1,"ms":1323,
+ "rerunAfterDrop":1,"rerunAfterTruncate":0}
+```
+
+So in a real session the ledger line carries `provider` and `model` right after `session`, and the run
+itself was a good one: 18 847 tokens saved, 6 calls dropped, 1 result truncated, and one attributed
+re-run (`rerunAfterDrop: 1`).
+
+`byProvider` in `stats.json` accumulates the same counters per `"<provider>:<model>"`. Verified
+deterministically with two sequential processes on one state directory (the "restart" case):
+
+```
+global:     runs 2, changed 2, dropped 2, tokensSaved 12
+byProvider: {"zen:jev-1.13-free": {"runs":2,"changed":2,"dropped":2,"truncated":0,
+             "requests":2,"tokensSaved":12,"rerunAfterDrop":0,"rerunAfterTruncate":0}}
+ledger:     2 lines
+```
+
+One caveat worth knowing: `stats.json` is read-modify-written, so two processes flushing in the same
+instant can lose each other's deltas (the counters, never the ledger — that one is append-only). The
+sequential restart case above is exact; concurrent writers are best-effort.
+
+No new deviations beyond the ones already listed above; the follow-up changed no defaults, no protocol
+and no decision logic.
