@@ -247,6 +247,11 @@ async function onContext(state: PluginState, event: SessionContext): Promise<voi
     state.stats.tokensBefore += run.tokensBefore;
     run.calls = calls.length;
 
+    // Re-runs are attributed to earlier decisions BEFORE this run's own decisions are remembered.
+    const reruns = state.telemetry.countReruns(event.sessionID, calls);
+    run.rerunAfterDrop = reruns.rerunAfterDrop;
+    run.rerunAfterTruncate = reruns.rerunAfterTruncate;
+
     const candidates = calls.filter(
       (call) => !call.pinned && !state.memo.has(call.tool_use_id),
     );
@@ -289,7 +294,9 @@ async function onContext(state: PluginState, event: SessionContext): Promise<voi
     }
 
     // Always re-apply: the host does not persist our edits, so remembered decisions must be redone.
-    const applied = applyDecisions(event.messages, source, calls, memoDecisions(state, calls), TRUNCATE_HEAD_CHARS);
+    const decisions = memoDecisions(state, calls);
+    const applied = applyDecisions(event.messages, source, calls, decisions, TRUNCATE_HEAD_CHARS);
+    state.telemetry.remember(event.sessionID, calls, decisions);
     state.stats.dropped += applied.dropped;
     state.stats.truncated += applied.truncated;
     run.dropped = applied.dropped;

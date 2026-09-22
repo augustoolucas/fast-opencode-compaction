@@ -35,6 +35,9 @@ const LEDGER_MAX_BYTES = 5 * 1024 * 1024;
 /** Counters are written to `stats.json` at most this often. */
 const FLUSH_INTERVAL_MS = 60_000;
 
+/** How many sessions' pruned signatures are remembered before the whole map is dropped. */
+const MAX_SESSIONS = 200;
+
 /**
  * Home of the persistent state (usage cap, ledger, counters, debug log). One implementation, shared
  * with the plugin.
@@ -81,14 +84,52 @@ export interface Counters {
   ms: number;
 }
 
+/** The rerun tallies of one run. */
+export interface RerunTally {
+  rerunAfterDrop: number;
+  rerunAfterTruncate: number;
+}
+
+/** The sliver of a library tool call telemetry looks at. */
+export interface TelemetryCall {
+  /** The library's short call id, as it appears in decisions. */
+  readonly id: string;
+  /** The V2 call id the adapter carried verbatim. */
+  readonly tool_use_id: string;
+  readonly tool: string;
+  readonly input: Record<string, unknown>;
+}
+
+/** The sliver of a library decision telemetry looks at. */
+export interface TelemetryDecision {
+  readonly action: string;
+  /** The library's short call id (`TelemetryCall.id`). */
+  readonly id: string;
+}
+
 /** What the plugin needs from telemetry. */
 export interface Telemetry {
+  /** Counts re-runs of calls pruned earlier. Call this BEFORE applying this run's decisions. */
+  countReruns(session: string, calls: readonly TelemetryCall[]): RerunTally;
+  /** Remembers the calls this run dropped or truncated, so a re-run can be attributed later. */
+  remember(session: string, calls: readonly TelemetryCall[], decisions: readonly TelemetryDecision[]): void;
   /** Counts the run and appends a ledger line when it changed the request. */
   record(session: string, run: RunRecord): void;
   /** Writes one debug line when tracing is on. */
   trace(message: string): void;
   /** Writes the counters out now, regardless of the minute interval. */
   flush(): void;
+}
+
+/** Stable identity of a tool call: the tool plus its input, kept in memory only. */
+export function callSignature(call: Pick<TelemetryCall, "tool" | "input">): string {
+  let input: string;
+  try {
+    input = JSON.stringify(call.input ?? {});
+  } catch {
+    input = "";
+  }
+  return `${call.tool}\u0000${input}`;
 }
 
 function zeros(): Counters {
@@ -125,6 +166,20 @@ export function createTelemetry(
   /** Deltas since the last flush, and when that flush happened. */
   let pending = zeros();
   let lastFlushMs = 0;
+
+  /** Per session: the signatures of the calls this plugin dropped or truncated, by call id. */
+  const prunes = new Map<string, { dropped: Map<string, string>; truncated: Map<string, string> }>();
+
+  function sessionPrunes(session: string): { dropped: Map<string, string>; truncated: Map<string, string> } {
+    let entry = prunes.get(session);
+    if (!entry) {
+      // Bound the map: past the limit the oldest attributions go, like the reference port does.
+      if (prunes.size >= MAX_SESSIONS) prunes.clear();
+      entry = { dropped: new Map(), truncated: new Map() };
+      prunes.set(session, entry);
+    }
+    return entry;
+  }
 
   function fail(error: unknown): void {
     warnOnce("telemetry:failed", `fast-opencode-compaction: telemetry failed (${errorText(error)})`);
@@ -169,6 +224,54 @@ export function createTelemetry(
   }
 
   return {
+    countReruns(session: string, calls: readonly TelemetryCall[]): RerunTally {
+      const tally: RerunTally = { rerunAfterDrop: 0, rerunAfterTruncate: 0 };
+      try {
+        const entry = prunes.get(session);
+        if (!entry) return tally;
+
+        for (const call of calls) {
+          const signature = callSignature(call);
+
+          const droppedUnder = entry.dropped.get(signature);
+          if (droppedUnder !== undefined) {
+            if (droppedUnder !== call.tool_use_id) {
+              tally.rerunAfterDrop += 1;
+              // Remember the new id so the same re-run is not counted again on the next request.
+              entry.dropped.set(signature, call.tool_use_id);
+            }
+            continue;
+          }
+
+          const truncatedUnder = entry.truncated.get(signature);
+          if (truncatedUnder !== undefined && truncatedUnder !== call.tool_use_id) {
+            tally.rerunAfterTruncate += 1;
+            entry.truncated.set(signature, call.tool_use_id);
+          }
+        }
+      } catch (error) {
+        fail(error);
+      }
+      return tally;
+    },
+
+    remember(session: string, calls: readonly TelemetryCall[], decisions: readonly TelemetryDecision[]): void {
+      try {
+        const entry = sessionPrunes(session);
+        const byId = new Map(calls.map((call) => [call.id, call]));
+
+        for (const decision of decisions) {
+          if (decision.action !== "drop_call" && decision.action !== "drop_result") continue;
+          const call = byId.get(decision.id);
+          if (!call) continue;
+          const target = decision.action === "drop_call" ? entry.dropped : entry.truncated;
+          target.set(callSignature(call), call.tool_use_id);
+        }
+      } catch (error) {
+        fail(error);
+      }
+    },
+
     record(session: string, run: RunRecord): void {
       try {
         const changed = run.dropped + run.truncated > 0;
