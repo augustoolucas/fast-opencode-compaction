@@ -12,6 +12,7 @@
 
 import { spawnSync } from "node:child_process";
 import type { JevAnswer, JevQuestion, JevResponse, JevState } from "fast-jev-compaction";
+import { buildJevRequest, parseJevResponse } from "fast-jev-compaction";
 
 /** One question the endpoint has to answer about the conversation state. */
 export type DecisionQuestion = JevQuestion;
@@ -259,4 +260,111 @@ export function resolveApiKey(
   }
 
   return undefined;
+}
+
+/** How a failed decision request is classified, so callers can warn, retry or disable. */
+export type ProviderErrorKind = "auth" | "funds" | "model" | "transport";
+
+/** A classified provider failure: the kind, the HTTP status, and a ready-to-print message. */
+export interface ProviderErrorInfo {
+  readonly kind: ProviderErrorKind;
+  readonly status: number;
+  readonly message: string;
+}
+
+/** Thrown by `ask` for a non-2xx response, so callers can branch on `kind` instead of parsing text. */
+export class ProviderRequestError extends Error {
+  readonly kind: ProviderErrorKind;
+  readonly status: number;
+
+  constructor(info: ProviderErrorInfo) {
+    super(info.message);
+    this.name = "ProviderRequestError";
+    this.kind = info.kind;
+    this.status = info.status;
+  }
+}
+
+/**
+ * Classifies a failed decision request: 401/403 are key problems, 402 is funds, a 400 that mentions
+ * an unavailable model is a model problem, and everything else is transport. The message is
+ * provider-agnostic and points at the option to check.
+ */
+export function describeProviderError(status: number, body: string): ProviderErrorInfo {
+  const detail = body.replace(/\s+/g, " ").trim().slice(0, 200) || "(empty body)";
+  const kind: ProviderErrorKind =
+    status === 401 || status === 403
+      ? "auth"
+      : status === 402
+        ? "funds"
+        : status === 400 && /model is unavailable/i.test(body)
+          ? "model"
+          : "transport";
+
+  const headline: Record<ProviderErrorKind, string> = {
+    auth: `decision endpoint rejected the API key (HTTP ${status}); check apiKey, apiKeyEnv and apiKeyCommand`,
+    funds: `decision endpoint reports insufficient funds (HTTP ${status}); top up the account or use another provider`,
+    model: `decision endpoint does not serve the configured model (HTTP ${status}); check the model option`,
+    transport: `decision endpoint request failed (HTTP ${status})`,
+  };
+
+  return {
+    kind,
+    status,
+    message: `fast-opencode-compaction: ${headline[kind]} — endpoint said: ${detail}`,
+  };
+}
+
+/** Identifies this plugin to the endpoint; override it through `headers["user-agent"]`. */
+const DEFAULT_USER_AGENT = "fast-opencode-compaction/0.1";
+
+function hasHeader(headers: Record<string, string>, name: string): boolean {
+  const wanted = name.toLowerCase();
+  return Object.keys(headers).some((key) => key.toLowerCase() === wanted);
+}
+
+/**
+ * Builds the `ask(state, questions)` function for a resolved provider. The request shape comes from
+ * `buildJevRequest` and the response is parsed by `parseJevResponse`, so the wire contract stays
+ * owned upstream; this function only adds transport, headers, the timeout and error visibility.
+ *
+ * `config.headers` is where per-call extras go, for example `x-opencode-session`; the plugin's
+ * User-Agent is added unless the caller overrode it. A missing API key is not fatal here — the key
+ * is sent as configured and the endpoint's rejection is classified as an auth error. Every request
+ * aborts after `config.timeoutMs`, and a non-2xx response is both warned about once and thrown as a
+ * classified `ProviderRequestError`.
+ */
+export function createAsker(
+  config: ResolvedProviderConfig,
+  fetchImpl: typeof fetch = fetch,
+): DecisionAsker {
+  return {
+    async ask(state, questions) {
+      const apiKey = resolveApiKey(config) ?? "";
+      const request = buildJevRequest(
+        { apiKey, model: config.model, baseUrl: config.baseUrl },
+        state,
+        questions,
+      );
+
+      const headers: Record<string, string> = { ...request.headers, ...config.headers };
+      if (!hasHeader(headers, "user-agent")) headers["user-agent"] = DEFAULT_USER_AGENT;
+
+      const response = await fetchImpl(request.url, {
+        method: request.method,
+        headers,
+        body: request.body,
+        signal: AbortSignal.timeout(config.timeoutMs),
+      });
+      const text = await response.text();
+
+      if (!response.ok) {
+        const info = describeProviderError(response.status, text);
+        warnOnce(`${config.provider}:${info.kind}:${config.baseUrl}`, info.message);
+        throw new ProviderRequestError(info);
+      }
+
+      return parseJevResponse(response.status, response.ok, text).answers;
+    },
+  };
 }
