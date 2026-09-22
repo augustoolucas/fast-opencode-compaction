@@ -1,5 +1,5 @@
 /**
- * Adapter tests (task 04): V2 message shapes → library messages + source map.
+ * Adapter tests: V2 message shapes → library messages + source map.
  *
  * Fixtures are plain objects with the V2 runtime shape; V2 itself builds these with `Schema.make`,
  * and the adapter only reads properties, so a cast is enough (and keeps the fixtures readable).

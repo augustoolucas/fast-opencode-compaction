@@ -1,6 +1,5 @@
 /**
- * Telemetry (task 07): what was removed, what it cost, and whether the model had to re-run a tool we
- * pruned.
+ * Telemetry: what was removed, what it cost, and whether the model had to re-run a tool we pruned.
  *
  * Three files, all under the state directory:
  * - `ledger.jsonl` — append-only, one line per run that changed the request, size-rotated at 5 MB to

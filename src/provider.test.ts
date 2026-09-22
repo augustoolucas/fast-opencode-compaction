@@ -1,5 +1,5 @@
 /**
- * Provider layer tests (task 03).
+ * Provider layer tests.
  *
  * No network and no real processes: `fetch` and `spawnSync` are injected. Environment variables are
  * stubbed per test, and key-resolution cases use distinct env var names and commands so the

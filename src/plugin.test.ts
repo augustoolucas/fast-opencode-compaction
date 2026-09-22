@@ -1,5 +1,5 @@
 /**
- * Plugin integration tests (task 06): the real hooks against a local `node:http` decision endpoint.
+ * Plugin integration tests: the real hooks against a local `node:http` decision endpoint.
  *
  * No external network: the endpoint binds 127.0.0.1 and answers whatever questions it is asked. The
  * daily usage file is redirected into a temp dir per test, so the cap test is deterministic.

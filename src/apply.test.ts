@@ -1,5 +1,5 @@
 /**
- * Apply tests (task 05): decisions → edits on V2 parts, with pairing invariants held.
+ * Apply tests: decisions → edits on V2 parts, with pairing invariants held.
  *
  * Calls and decisions come from the real library (`collectToolCalls` + `decideCall`) so the id
  * translation this module depends on — decision id `t1` → `tool_use_id` `call_1` → source map — is

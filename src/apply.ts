@@ -1,8 +1,8 @@
 /**
- * Apply step (task 05): turn library `CallDecision`s into edits on the outgoing V2 request.
+ * Apply step: turn library `CallDecision`s into edits on the outgoing V2 request.
  *
- * Task-02 proved that editing the hook's messages affects only the request being built and does NOT
- * persist into the session, so this module edits in place: parts are spliced out of
+ * The hook spike established that editing the hook's messages affects only the request being built
+ * and does NOT persist into the session, so this module edits in place: parts are spliced out of
  * `SourceEntry.parts` — the same array the V2 message holds — and messages that lose all their parts
  * are spliced out of the request array. V2 types declare parts readonly, hence the narrow mutable
  * views; the hook hands over live objects, which is what makes the edits land.

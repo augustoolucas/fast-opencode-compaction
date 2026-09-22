@@ -1,7 +1,7 @@
 /**
- * The plugin (task 06): gate → daily cap → memo → ask → decide → apply, with fail-open semantics.
+ * The plugin: gate → daily cap → memo → ask → decide → apply, with fail-open semantics.
  *
- * What task 02 established and this file relies on:
+ * What the hook spike established, and what this file relies on:
  * - `setup` runs once per process, so all state here is process-local (closures over `setup`).
  * - `ctx.session.hook(name, callback)` registers; callbacks mutate the event in place and the host
  *   builds the outgoing request from the object we mutated.
@@ -40,7 +40,7 @@ import {
   type ResolvedProviderConfig,
 } from "./provider.js";
 
-/** Characters of a dropped result body to keep (task 03 exposes no option for this yet). */
+/** Characters of a dropped result body to keep; deliberately not an option. */
 const TRUNCATE_HEAD_CHARS = 300;
 
 /** Hard ceiling on decision requests per day, matching the reference port. */
@@ -50,7 +50,7 @@ const DAILY_REQUEST_CAP = 200;
 const USAGE_FILE = "usage.json";
 
 /**
- * Process-local counters, shaped so task 07 can persist them without reshaping: `stage` is the last
+ * Process-local counters, shaped so the telemetry layer can persist them without reshaping: `stage` is the last
  * fitting stage, the rest accumulate over the process's runs. `failures` counts runs (or compaction
  * notes) that were abandoned — the request is always left as it was.
  */
@@ -368,7 +368,7 @@ function onCompaction(state: PluginState, event: SessionCompaction): void {
 /**
  * Registers the hooks unless no decision endpoint is configured, in which case the plugin stays off
  * and says so once. `enabled: false` is the deliberate off switch: no hooks and no warning at all.
- * `setup` runs once per process (task 02), so the memo and the counters live here.
+ * `setup` runs once per process, so the memo and the counters live here.
  */
 export async function setup(ctx: Plugin.Context): Promise<void> {
   const options = (ctx.options ?? {}) as ProviderConfig;

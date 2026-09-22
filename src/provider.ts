@@ -1,5 +1,5 @@
 /**
- * Provider layer (task 03).
+ * Provider layer.
  *
  * Resolves a typed-decision endpoint from plugin options and the environment, and exposes it as a
  * single `ask(state, questions)` function. The wire format itself is owned upstream by

@@ -1,8 +1,8 @@
 /**
- * Telemetry tests (task 07): ledger, rotation, counters that survive a restart, rerun attribution,
+ * Telemetry tests: ledger, rotation, counters that survive a restart, rerun attribution,
  * and the guarantee that no message or tool-result content ever reaches a telemetry file.
  *
- * The last test drives the real plugin (task 06 wiring) against a local `node:http` endpoint and
+ * The last test drives the real plugin wiring against a local `node:http` endpoint and
  * then greps every telemetry file for a distinctive marker that travelled through the request.
  */
 

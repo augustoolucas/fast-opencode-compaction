@@ -1,5 +1,5 @@
 /**
- * Adapter (task 04): V2 request messages → the compaction library's `Message` shape, plus the source
+ * Adapter: V2 request messages → the compaction library's `Message` shape, plus the source
  * map the apply step needs to edit the original parts.
  *
  * Two views are returned and they are deliberately different:
@@ -81,7 +81,7 @@ export interface SourceEntry {
   /**
    * The message's content array — the same array instance the message holds, so the apply step can
    * splice parts out of it and have the change land on the request. (V2 types declare `content`
-   * readonly; the hook hands over live objects and task-02 showed in-place edits take effect.)
+   * readonly; the hook hands over live objects and the spike showed in-place edits take effect.)
    */
   readonly parts: ContentPart[];
   /** V2 `tool-call` parts of this message, keyed by the call id carried verbatim from V2. */
