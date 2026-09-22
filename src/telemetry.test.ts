@@ -14,7 +14,7 @@ import { join } from "node:path";
 import type { ContentPart, Message as V2Message } from "@opencode/ai";
 import type { SessionContext } from "@opencode/plugin/promise/session";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTelemetry, type RunRecord, type TelemetryCall } from "./telemetry.js";
+import { createTelemetry, type ProviderBucket, type RunRecord, type TelemetryCall } from "./telemetry.js";
 import { setup } from "./plugin.js";
 
 const LEDGER = "ledger.jsonl";
@@ -259,6 +259,91 @@ describe("rerun attribution", () => {
       rerunAfterDrop: 1,
       rerunAfterTruncate: 0,
     });
+  });
+});
+
+describe("provider identity", () => {
+  const clock = () => Date.parse("2026-09-22T12:00:00.000Z");
+
+  it("stamps provider and model on every ledger line, right after session", () => {
+    const telemetry = createTelemetry(directory, clock, { provider: "zen", model: "jev-1.13-free" });
+
+    telemetry.record("ses_1", run({ dropped: 1, tokensSaved: 10, requests: 1 }));
+
+    const [line] = ledgerLines();
+    expect(line).toMatchObject({ session: "ses_1", provider: "zen", model: "jev-1.13-free" });
+    expect(Object.keys(line ?? {}).slice(0, 4)).toEqual(["at", "session", "provider", "model"]);
+  });
+
+  it("accumulates byProvider buckets per identity, across instances", () => {
+    const a = createTelemetry(directory, clock, { provider: "zen", model: "jev-1.13-free" });
+    a.record("ses_a", run({ dropped: 1, requests: 1, tokensSaved: 100, rerunAfterDrop: 1 }));
+    a.record("ses_a", run({ calls: 1 })); // unchanged run: counted in the bucket, no ledger line
+    a.flush();
+
+    const b = createTelemetry(directory, clock, { provider: "zen", model: "jev-1.13" });
+    b.record("ses_b", run({ truncated: 1, requests: 1, tokensSaved: 50, rerunAfterTruncate: 1 }));
+
+    const c = createTelemetry(directory, clock, { provider: "custom", model: "laya-typed-decisions" });
+    c.record("ses_c", run({ dropped: 2, requests: 2, tokensSaved: 200 }));
+
+    // A restart: a new recorder with the same identity adds to the same bucket.
+    const d = createTelemetry(directory, clock, { provider: "zen", model: "jev-1.13-free" });
+    d.record("ses_d", run({ dropped: 1, requests: 1, tokensSaved: 100, rerunAfterDrop: 1 }));
+
+    const written = JSON.parse(readFileSync(join(directory, STATS), "utf8")) as {
+      byProvider: Record<string, ProviderBucket>;
+    };
+    expect(written.byProvider).toEqual({
+      "zen:jev-1.13-free": {
+        runs: 3,
+        changed: 2,
+        dropped: 2,
+        truncated: 0,
+        requests: 2,
+        tokensSaved: 200,
+        rerunAfterDrop: 2,
+        rerunAfterTruncate: 0,
+      },
+      "zen:jev-1.13": {
+        runs: 1,
+        changed: 1,
+        dropped: 0,
+        truncated: 1,
+        requests: 1,
+        tokensSaved: 50,
+        rerunAfterDrop: 0,
+        rerunAfterTruncate: 1,
+      },
+      "custom:laya-typed-decisions": {
+        runs: 1,
+        changed: 1,
+        dropped: 2,
+        truncated: 0,
+        requests: 2,
+        tokensSaved: 200,
+        rerunAfterDrop: 0,
+        rerunAfterTruncate: 0,
+      },
+    });
+
+    // The global counters keep their shape and add up the same runs.
+    expect(stats()).toMatchObject({
+      runs: 5,
+      changed: 4,
+      dropped: 4,
+      truncated: 1,
+      requests: 5,
+      tokensSaved: 450,
+    });
+
+    // Every changed run got a line, each tagged with its own identity.
+    expect(ledgerLines().map((line) => `${line.provider}:${line.model}`)).toEqual([
+      "zen:jev-1.13-free",
+      "zen:jev-1.13",
+      "custom:laya-typed-decisions",
+      "zen:jev-1.13-free",
+    ]);
   });
 });
 
