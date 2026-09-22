@@ -4,11 +4,13 @@
   "description": "Native opencode V2 plugin that prunes stale tool calls and results from the outgoing request using a typed-decision endpoint.",
   "type": "module",
   "license": "MIT",
+  "private": true,
+  "repository": { "type": "git", "url": "git+https://github.com/augustoolucas/fast-opencode-compaction.git" },
+  "keywords": ["opencode", "opencode-plugin", "compaction", "context", "pruning", "jev", "system-one"],
   "engines": {
     "opencode": ">=2"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -23,20 +25,7 @@
     "vitest": "^5.0.1"
   },
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    },
-    "./server": {
-      "types": "./dist/server.d.ts",
-      "import": "./dist/server.js"
-    }
-  },
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE",
-    "NOTICE",
-    "PROTOCOL.md"
-  ]
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts"
+  }
 }
