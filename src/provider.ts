@@ -37,7 +37,15 @@ export interface ProviderDefaults {
   readonly model: string;
   /** Environment variable consulted when `apiKey` is not set; empty means "no default". */
   readonly apiKeyEnv: string;
+  /**
+   * Estimated request tokens below which the plugin does not engage. Big-context providers keep it
+   * high: every engagement costs a decision request and invalidates the provider's prompt cache, so
+   * it has to buy more than a round trip.
+   */
+  readonly thresholdTokens: number;
+  /** Token ceiling for the state sent with a decision request. */
   readonly maxStateTokens: number;
+  /** Token ceiling for state plus one batch of questions. */
   readonly maxRequestTokens: number;
 }
 
@@ -47,6 +55,7 @@ export const PROVIDER_DEFAULTS: Record<ProviderName, ProviderDefaults> = {
     baseUrl: "https://api.typesafe.ai/v1/systemone",
     model: "jev-latest",
     apiKeyEnv: "TYPESAFE_API_KEY",
+    thresholdTokens: 60_000,
     maxStateTokens: 25_000,
     maxRequestTokens: 30_000,
   },
@@ -54,6 +63,7 @@ export const PROVIDER_DEFAULTS: Record<ProviderName, ProviderDefaults> = {
     baseUrl: "https://opencode.ai/zen/v1/systemone",
     model: "jev-1.13-free",
     apiKeyEnv: "OPENCODE_API_KEY",
+    thresholdTokens: 60_000,
     maxStateTokens: 25_000,
     maxRequestTokens: 30_000,
   },
@@ -61,6 +71,7 @@ export const PROVIDER_DEFAULTS: Record<ProviderName, ProviderDefaults> = {
     baseUrl: "",
     model: "",
     apiKeyEnv: "",
+    thresholdTokens: 20_000,
     maxStateTokens: 900,
     maxRequestTokens: 1_200,
   },
@@ -68,10 +79,11 @@ export const PROVIDER_DEFAULTS: Record<ProviderName, ProviderDefaults> = {
 
 /** Defaults for the knobs `PROVIDER_DEFAULTS` does not pin. All overridable per plugin options. */
 const OPTION_DEFAULTS = {
-  /** A large state plus its questions can take a while to answer. */
-  timeoutMs: 30_000,
-  /** Below this the round trip costs more than the pruning can save. */
-  thresholdTokens: 20_000,
+  /**
+   * The decision request runs inside a pre-request hook, so a hung endpoint must not hold a model
+   * call for long.
+   */
+  timeoutMs: 20_000,
   /** Matches `fast-jev-compaction`'s own defaults. */
   keepThreshold: 0.5,
   /** Matches `fast-jev-compaction`'s own defaults. */
@@ -189,7 +201,7 @@ export function resolveProviderConfig(
     apiKeyCommand: options.apiKeyCommand,
     headers: { ...options.headers },
     timeoutMs: options.timeoutMs ?? OPTION_DEFAULTS.timeoutMs,
-    thresholdTokens: options.thresholdTokens ?? OPTION_DEFAULTS.thresholdTokens,
+    thresholdTokens: options.thresholdTokens ?? defaults.thresholdTokens,
     keepThreshold: options.keepThreshold ?? OPTION_DEFAULTS.keepThreshold,
     preserveRecent: options.preserveRecent ?? OPTION_DEFAULTS.preserveRecent,
     maxStateTokens: options.maxStateTokens ?? defaults.maxStateTokens,

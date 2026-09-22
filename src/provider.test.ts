@@ -82,6 +82,8 @@ describe("resolveProviderConfig", () => {
       baseUrl: PROVIDER_DEFAULTS.typesafe.baseUrl,
       model: "jev-latest",
       apiKeyEnv: "TYPESAFE_API_KEY",
+      timeoutMs: 20_000,
+      thresholdTokens: 60_000,
       maxStateTokens: 25_000,
       maxRequestTokens: 30_000,
       enabled: true,
@@ -100,6 +102,8 @@ describe("resolveProviderConfig", () => {
       baseUrl: PROVIDER_DEFAULTS.zen.baseUrl,
       model: "jev-1.13-free",
       apiKeyEnv: "OPENCODE_API_KEY",
+      timeoutMs: 20_000,
+      thresholdTokens: 60_000,
       maxStateTokens: 25_000,
       maxRequestTokens: 30_000,
     });
@@ -150,6 +154,12 @@ describe("resolveProviderConfig", () => {
       maxRequestTokens: 222,
       enabled: true,
     });
+
+    // The per-provider defaults are overridable on their own, too.
+    expect(resolveProviderConfig({ provider: "zen", thresholdTokens: 5_000, timeoutMs: 2_500 }, {})).toMatchObject({
+      thresholdTokens: 5_000,
+      timeoutMs: 2_500,
+    });
   });
 
   it("keeps custom's small budgets by default", () => {
@@ -158,7 +168,12 @@ describe("resolveProviderConfig", () => {
       {},
     );
 
-    expect(config).toMatchObject({ maxStateTokens: 900, maxRequestTokens: 1_200, apiKeyEnv: undefined });
+    expect(config).toMatchObject({
+      thresholdTokens: 20_000,
+      maxStateTokens: 900,
+      maxRequestTokens: 1_200,
+      apiKeyEnv: undefined,
+    });
   });
 
   it("refuses an incomplete custom provider and says so once", () => {
