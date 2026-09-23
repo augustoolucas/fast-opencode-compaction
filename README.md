@@ -56,6 +56,13 @@ neither is set.
 All options, budgets, tuning and troubleshooting: [docs/configuration.md](./docs/configuration.md).
 Local-model recipe (a Laya bridge): [docs/configuration.md#custom-a-local-laya-bridge](./docs/configuration.md#custom-a-local-laya-bridge).
 
+## Cost & latency
+
+Every request above `thresholdTokens` that has tool calls the plugin has not decided on yet pays one
+serial round-trip to the decision endpoint inside the hook — bounded by `timeoutMs` (default 20 s) —
+and prompt caching breaks from the first drop. That trade-off is what the ledger measures:
+`tokensSaved` versus `rerunAfter*`.
+
 ## Telemetry
 
 One JSONL line per run that changed the request:

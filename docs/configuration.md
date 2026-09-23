@@ -79,8 +79,9 @@ or pass a provider option); the plugin stays off
 
 ## Options
 
-Every option is optional. Options come from the plugin entry's `options` object in `opencode.jsonc`
-(or `cli.json`), and the key can also come from the environment.
+Most options have a default; `custom` is the exception and requires `baseUrl` and `model`. Options
+come from the plugin entry's `options` object in `opencode.jsonc` (or `cli.json`), and the key can
+also come from the environment.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -338,7 +339,7 @@ wherever `FAST_OPENCODE_COMPACTION_STATE_DIR` points.
 | File | Contents |
 | --- | --- |
 | `ledger.jsonl` | One line per run that changed the request; rotated to `ledger.jsonl.1` at 5 MB. |
-| `stats.json` | Cumulative counters plus a `byProvider` map, merged on every write so restarts do not lose history. |
+| `stats.json` | Cumulative counters plus a `byProvider` map, written at most once a minute and on process exit; a hard kill inside that window loses the pending deltas. `ledger.jsonl` is append-only and loses nothing. |
 | `debug.log` | Verbose trace, only with `FAST_OPENCODE_COMPACTION_DEBUG=1`. |
 
 Ledger fields: `at, session, provider, model, reason, stage, tokensBefore, tokensAfter, tokensSaved,
