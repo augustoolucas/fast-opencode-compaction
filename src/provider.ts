@@ -317,11 +317,14 @@ function runApiKeyCommand(command: readonly string[], spawn: SpawnSyncLike): str
 /**
  * Resolves the API key for a provider config: explicit `apiKey`, then its `apiKeyEnv` variable, then
  * its `apiKeyCommand`. Successful lookups are cached per process, so a command runs at most once.
+ * `env` defaults to `process.env` but is injectable, so a caller can capture the environment once
+ * (the plugin does, in `setup`) instead of re-reading it on every request.
  * Returns `undefined` when nothing yields a key — callers decide whether that is fatal.
  */
 export function resolveApiKey(
   config: Pick<ProviderConfig, "provider" | "apiKey" | "apiKeyEnv" | "apiKeyCommand">,
   spawn: SpawnSyncLike = spawnSyncLike,
+  env: Record<string, string | undefined> = process.env,
 ): string | undefined {
   if (config.apiKey) return config.apiKey;
 
@@ -333,7 +336,7 @@ export function resolveApiKey(
   const cached = apiKeyCache.get(cacheKey);
   if (cached !== undefined) return cached;
 
-  const fromEnv = config.apiKeyEnv ? process.env[config.apiKeyEnv] : undefined;
+  const fromEnv = config.apiKeyEnv ? env[config.apiKeyEnv] : undefined;
   if (fromEnv) {
     apiKeyCache.set(cacheKey, fromEnv);
     return fromEnv;
@@ -420,15 +423,17 @@ function hasHeader(headers: Record<string, string>, name: string): boolean {
  * User-Agent is added unless the caller overrode it. A missing API key is not fatal here — the key
  * is sent as configured and the endpoint's rejection is classified as an auth error. Every request
  * aborts after `config.timeoutMs`, and a non-2xx response is both warned about once and thrown as a
- * classified `ProviderRequestError`.
+ * classified `ProviderRequestError`. `env` is passed through to `resolveApiKey` (default
+ * `process.env`), so a caller that captured the environment at setup reads it from there.
  */
 export function createAsker(
   config: ResolvedProviderConfig,
   fetchImpl: typeof fetch = fetch,
+  env: Record<string, string | undefined> = process.env,
 ): DecisionAsker {
   return {
     async ask(state, questions) {
-      const apiKey = resolveApiKey(config) ?? "";
+      const apiKey = resolveApiKey(config, spawnSyncLike, env) ?? "";
       const request = buildJevRequest(
         { apiKey, model: config.model, baseUrl: config.baseUrl },
         state,

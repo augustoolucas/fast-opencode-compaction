@@ -4,8 +4,9 @@
  * Three files, all under the state directory:
  * - `ledger.jsonl` — append-only, one line per run that changed the request, size-rotated at 5 MB to
  *   `ledger.jsonl.1`. Counts, lengths and ids only: no message content, no tool results, no keys.
- * - `stats.json` — cumulative counters, flushed at most once a minute and merged into whatever the
- *   file already holds, so a restart does not lose history.
+ * - `stats.json` — cumulative counters, written at most once a minute (and on process exit) and
+ *   merged into whatever the file already holds. Deltas pending when the process is killed inside
+ *   that window are lost; `ledger.jsonl` is append-only, so it loses nothing.
  * - `debug.log` — verbose trace, only with `FAST_OPENCODE_COMPACTION_DEBUG=1`.
  *
  * Nothing here may throw: a telemetry failure must never affect the outgoing request. Failures are
@@ -38,6 +39,32 @@ const FLUSH_INTERVAL_MS = 60_000;
 const MAX_SESSIONS = 200;
 
 /**
+ * Flushers to run on process exit. `flush()` is synchronous (`writeFileSync` + rename), so it is safe
+ * from an `exit` handler; a hard kill (SIGKILL) still skips it, which is the documented gap.
+ */
+const exitFlushers = new Set<() => void>();
+let exitFlushInstalled = false;
+
+function onProcessExit(): void {
+  for (const flush of exitFlushers) {
+    try {
+      flush();
+    } catch {
+      // an exit flush must never throw
+    }
+  }
+}
+
+/** Registers `flush` to run once on process exit; the first registration installs the handler. */
+function registerExitFlush(flush: () => void): void {
+  if (!exitFlushInstalled) {
+    exitFlushInstalled = true;
+    process.once("exit", onProcessExit);
+  }
+  exitFlushers.add(flush);
+}
+
+/**
  * Home of the persistent state (usage cap, ledger, counters, debug log). One implementation, shared
  * with the plugin.
  */
@@ -61,6 +88,8 @@ export interface RunRecord {
   dropped: number;
   truncated: number;
   requests: number;
+  /** Runs (or compaction notes) abandoned with an error; the request is always left as it was. */
+  failures: number;
   ms: number;
   rerunAfterDrop: number;
   rerunAfterTruncate: number;
@@ -75,6 +104,8 @@ export interface Counters {
   dropped: number;
   truncated: number;
   requests: number;
+  /** Runs abandoned with an error; the ledger carries no per-run failure field. */
+  failures: number;
   rerunAfterDrop: number;
   rerunAfterTruncate: number;
   tokensBefore: number;
@@ -162,9 +193,7 @@ export interface Telemetry {
   trace(message: string): void;
   /** Writes the counters out now, regardless of the minute interval. */
   flush(): void;
-}
-
-/** Stable identity of a tool call: the tool plus its input, kept in memory only. */
+}/** Stable identity of a tool call: the tool plus its input, kept in memory only. */
 export function callSignature(call: Pick<TelemetryCall, "tool" | "input">): string {
   let input: string;
   try {
@@ -183,6 +212,7 @@ function zeros(): Counters {
     dropped: 0,
     truncated: 0,
     requests: 0,
+    failures: 0,
     rerunAfterDrop: 0,
     rerunAfterTruncate: 0,
     tokensBefore: 0,
@@ -286,6 +316,27 @@ export function createTelemetry(
     renameSync(temp, statsPath);
   }
 
+  /** Writes whatever is pending, then starts a new window. Synchronous, so it is exit-handler safe. */
+  function flushCounters(): void {
+    try {
+      writeCounters();
+      pending = zeros();
+      pendingByProvider = new Map();
+      lastFlushMs = nowMs();
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  // Closing the process inside the one-minute window would otherwise drop the last deltas; a normal
+  // exit flushes them. Only instances with something pending write, so untouched files stay untouched.
+  registerExitFlush(() => {
+    const hasPending =
+      pendingByProvider.size > 0 ||
+      (Object.keys(pending) as Array<keyof Counters>).some((key) => pending[key] !== 0);
+    if (hasPending) flushCounters();
+  });
+
   return {
     countReruns(session: string, calls: readonly TelemetryCall[]): RerunTally {
       const tally: RerunTally = { rerunAfterDrop: 0, rerunAfterTruncate: 0 };
@@ -344,6 +395,7 @@ export function createTelemetry(
         pending.dropped += run.dropped;
         pending.truncated += run.truncated;
         pending.requests += run.requests;
+        pending.failures += run.failures;
         pending.rerunAfterDrop += run.rerunAfterDrop;
         pending.rerunAfterTruncate += run.rerunAfterTruncate;
         pending.tokensBefore += run.tokensBefore;
@@ -413,15 +465,6 @@ export function createTelemetry(
       }
     },
 
-    flush(): void {
-      try {
-        writeCounters();
-        pending = zeros();
-        pendingByProvider = new Map();
-        lastFlushMs = nowMs();
-      } catch (error) {
-        fail(error);
-      }
-    },
+    flush: flushCounters,
   };
 }

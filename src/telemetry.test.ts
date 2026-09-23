@@ -52,6 +52,7 @@ function run(overrides: Partial<RunRecord> = {}): RunRecord {
     dropped: 0,
     truncated: 0,
     requests: 0,
+    failures: 0,
     ms: 0,
     rerunAfterDrop: 0,
     rerunAfterTruncate: 0,
@@ -132,6 +133,17 @@ describe("ledger and counters", () => {
       tokensSaved: 60,
       ms: 7,
     });
+  });
+
+  it("counts failures in stats.json and keeps them out of the ledger", () => {
+    const telemetry = createTelemetry(directory);
+    telemetry.record("ses_1", run({ dropped: 1, failures: 1 }));
+    telemetry.flush();
+
+    expect(stats()).toMatchObject({ runs: 1, changed: 1, dropped: 1, failures: 1 });
+
+    const line = readFileSync(join(directory, LEDGER), "utf8").trim();
+    expect(JSON.parse(line)).not.toHaveProperty("failures");
   });
 
   it("flushes at most once a minute and merges into the counters already on disk", () => {

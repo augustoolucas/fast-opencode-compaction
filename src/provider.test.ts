@@ -321,6 +321,26 @@ describe("resolveApiKey", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it("reads the key from the injected environment, not from process.env", () => {
+    vi.stubEnv("PROBE_KEY_INJECTED", "from-process-env");
+    const spawn = vi.fn<SpawnSyncLike>(() => ({ status: 0, stdout: "from-command\n" }));
+
+    // The injected env wins even when process.env holds the same variable.
+    expect(
+      resolveApiKey({ provider: "custom", apiKeyEnv: "PROBE_KEY_INJECTED" }, spawn, {
+        PROBE_KEY_INJECTED: "from-argument",
+      }),
+    ).toBe("from-argument");
+
+    // And a variable only the injected env carries is used too.
+    expect(
+      resolveApiKey({ provider: "custom", apiKeyEnv: "PROBE_KEY_INJECTED_ONLY" }, spawn, {
+        PROBE_KEY_INJECTED_ONLY: "injected-only",
+      }),
+    ).toBe("injected-only");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("runs the command without a shell, trims stdout, and caches the result per process", () => {
     const calls: Array<{ command: string; args: readonly string[]; options: unknown }> = [];
     const spawn: SpawnSyncLike = (command, args, options) => {
