@@ -49,49 +49,15 @@ const DAILY_REQUEST_CAP = 200;
 /** File inside the state dir that tracks today's reservations. */
 const USAGE_FILE = "usage.json";
 
-/**
- * Process-local counters, shaped so the telemetry layer can persist them without reshaping: `stage` is the last
- * fitting stage, the rest accumulate over the process's runs. `failures` counts runs (or compaction
- * notes) that were abandoned — the request is always left as it was.
- */
-export interface CompactionStats {
-  runs: number;
-  calls: number;
-  dropped: number;
-  truncated: number;
-  requests: number;
-  failures: number;
-  ms: number;
-  stage: string;
-  tokensBefore: number;
-  tokensAfter: number;
-  tokensSaved: number;
-}
-
 interface PluginState {
   readonly config: ResolvedProviderConfig;
+  /** The environment captured at `setup`, so key lookups do not re-read `process.env` per request. */
+  readonly env: Record<string, string | undefined>;
   /** One asker per session, so `x-opencode-session` and the User-Agent ride in the request headers. */
   readonly askers: Map<string, DecisionAsker>;
   /** `tool_use_id` → action. Monotonic: a dropped call is never asked about again. */
   readonly memo: Map<string, CallDecision["action"]>;
-  readonly stats: CompactionStats;
   readonly telemetry: Telemetry;
-}
-
-function emptyStats(): CompactionStats {
-  return {
-    runs: 0,
-    calls: 0,
-    dropped: 0,
-    truncated: 0,
-    requests: 0,
-    failures: 0,
-    ms: 0,
-    stage: "",
-    tokensBefore: 0,
-    tokensAfter: 0,
-    tokensSaved: 0,
-  };
 }
 
 function errorText(error: unknown): string {
@@ -120,9 +86,11 @@ function usageDay(date = new Date()): string {
 
 /**
  * Reserves up to `count` decision requests for today and reports how many may actually be sent (0
- * when the cap is reached). The file is written temp-then-rename so two processes cannot lose each
- * other's reservations. An unusable state directory fails open with a one-shot warning: losing the
- * cap beats silently switching compaction off.
+ * when the cap is reached). The file is written temp-then-rename, so a reader never sees a torn or
+ * half-written file — but the read-modify-write cycle is not multiprocess-safe: two processes
+ * reserving at the same time can read the same `used` value and each lose the other's increment.
+ * An unusable state directory fails open with a one-shot warning: losing the cap beats silently
+ * switching compaction off.
  */
 function reserveRequests(count: number, cap: number = DAILY_REQUEST_CAP): number {
   if (count <= 0) return 0;
@@ -168,7 +136,7 @@ function askerFor(state: PluginState, sessionID: string): DecisionAsker {
     ...state.config.headers,
     ...(sessionID ? { "x-opencode-session": sessionID } : {}),
   };
-  const asker = createAsker({ ...state.config, headers });
+  const asker = createAsker({ ...state.config, headers }, fetch, state.env);
   state.askers.set(sessionID, asker);
   return asker;
 }
@@ -214,7 +182,6 @@ function memoDecisions(state: PluginState, calls: readonly ToolCall[]): CallDeci
 
 async function onContext(state: PluginState, event: SessionContext): Promise<void> {
   const started = Date.now();
-  state.stats.runs += 1;
   state.telemetry.trace(`context called session=${event.sessionID}`);
 
   const run: RunRecord = {
@@ -227,6 +194,7 @@ async function onContext(state: PluginState, event: SessionContext): Promise<voi
     dropped: 0,
     truncated: 0,
     requests: 0,
+    failures: 0,
     ms: 0,
     rerunAfterDrop: 0,
     rerunAfterTruncate: 0,
@@ -243,8 +211,6 @@ async function onContext(state: PluginState, event: SessionContext): Promise<voi
 
     const { messages: library, source } = toLibraryMessages(event.messages);
     const calls = collectToolCalls(library, state.config.preserveRecent);
-    state.stats.calls += calls.length;
-    state.stats.tokensBefore += run.tokensBefore;
     run.calls = calls.length;
 
     // Re-runs are attributed to earlier decisions BEFORE this run's own decisions are remembered.
@@ -262,13 +228,18 @@ async function onContext(state: PluginState, event: SessionContext): Promise<voi
         maxStateTokens: state.config.maxStateTokens,
         preserveRecentMessages: state.config.preserveRecent,
       });
-      state.stats.stage = fitted.stage;
       run.stage = fitted.stage;
-
       const batches = batchCalls(candidates, fitted.tokens, {
         maxRequestTokens: state.config.maxRequestTokens,
       });
       const allowed = reserveRequests(batches.length);
+      if (allowed < batches.length) {
+        warnOnce(
+          "plugin:daily-cap",
+          `fast-opencode-compaction: daily cap of ${DAILY_REQUEST_CAP} decision requests reached; ` +
+            `${batches.length - allowed} of ${batches.length} batches skipped today — the cap resets on the next local day`,
+        );
+      }
       const asker = askerFor(state, event.sessionID);
       state.telemetry.trace(
         `candidates=${candidates.length} batches=${batches.length} allowed=${allowed}`,
@@ -279,10 +250,9 @@ async function onContext(state: PluginState, event: SessionContext): Promise<voi
           const questions = Object.assign({}, ...batch.map((call) => questionsFor(call)));
           const answers = await asker.ask(fitted.state, questions);
           run.requests += 1;
-          state.stats.requests += 1;
           rememberAnswers(state, batch, answers);
         } catch (error) {
-          state.stats.failures += 1;
+          run.failures += 1;
           state.telemetry.trace(`decision request failed: ${errorText(error)}`);
           warnOnce(
             "plugin:decision-failed",
@@ -297,21 +267,17 @@ async function onContext(state: PluginState, event: SessionContext): Promise<voi
     const decisions = memoDecisions(state, calls);
     const applied = applyDecisions(event.messages, source, calls, decisions, TRUNCATE_HEAD_CHARS);
     state.telemetry.remember(event.sessionID, calls, decisions);
-    state.stats.dropped += applied.dropped;
-    state.stats.truncated += applied.truncated;
     run.dropped = applied.dropped;
     run.truncated = applied.truncated;
 
     run.tokensAfter =
       applied.dropped + applied.truncated > 0 ? estimateRequestTokens(event) : run.tokensBefore;
     run.tokensSaved = Math.max(0, run.tokensBefore - run.tokensAfter);
-    state.stats.tokensAfter += run.tokensAfter;
-    state.stats.tokensSaved += run.tokensSaved;
     state.telemetry.trace(
       `applied dropped=${run.dropped} truncated=${run.truncated} requests=${run.requests}`,
     );
   } catch (error) {
-    state.stats.failures += 1;
+    run.failures += 1;
     state.telemetry.trace(`context hook failed: ${errorText(error)}`);
     warnOnce(
       "plugin:context-failed",
@@ -319,7 +285,6 @@ async function onContext(state: PluginState, event: SessionContext): Promise<voi
     );
   } finally {
     run.ms = Date.now() - started;
-    state.stats.ms += run.ms;
     state.telemetry.record(event.sessionID, run);
   }
 }
@@ -330,6 +295,7 @@ async function onContext(state: PluginState, event: SessionContext): Promise<voi
  */
 function onCompaction(state: PluginState, event: SessionCompaction): void {
   const started = Date.now();
+  let failures = 0;
   try {
     event.system.push({
       type: "text",
@@ -340,7 +306,7 @@ function onCompaction(state: PluginState, event: SessionCompaction): void {
     });
     state.telemetry.trace(`compaction note appended session=${event.sessionID}`);
   } catch (error) {
-    state.stats.failures += 1;
+    failures = 1;
     warnOnce(
       "plugin:compaction-failed",
       `fast-opencode-compaction: the compaction note could not be added (${errorText(error)})`,
@@ -358,6 +324,7 @@ function onCompaction(state: PluginState, event: SessionCompaction): void {
       dropped: 0,
       truncated: 0,
       requests: 0,
+      failures,
       ms: Date.now() - started,
       rerunAfterDrop: 0,
       rerunAfterTruncate: 0,
@@ -372,7 +339,9 @@ function onCompaction(state: PluginState, event: SessionCompaction): void {
  */
 export async function setup(ctx: Plugin.Context): Promise<void> {
   const options = (ctx.options ?? {}) as ProviderConfig;
-  const config = resolveProviderConfig(options, process.env);
+  // Captured once: key lookups read this snapshot instead of re-reading `process.env` per request.
+  const env = process.env;
+  const config = resolveProviderConfig(options, env);
   if (!config) {
     // Only a genuinely unconfigured plugin warns; a disabled one is silent by design.
     if (options.enabled !== false) {
@@ -386,9 +355,9 @@ export async function setup(ctx: Plugin.Context): Promise<void> {
 
   const state: PluginState = {
     config,
+    env,
     askers: new Map(),
     memo: new Map(),
-    stats: emptyStats(),
     telemetry: createTelemetry(stateDirectory(), Date.now, {
       provider: config.provider,
       model: config.model,

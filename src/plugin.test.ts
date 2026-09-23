@@ -258,6 +258,7 @@ describe("context hook", () => {
 
   it("stops at the daily cap without touching the request", async () => {
     const endpoint = await startEndpoint(answers(0.1, 0.1));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { ctx, hooks } = fakeContext(pluginOptions(endpoint.baseUrl));
     await setup(ctx);
 
@@ -276,6 +277,9 @@ describe("context hook", () => {
     expect(endpoint.requests).toHaveLength(1); // the capped run sent nothing
     expect(capped.messages).toHaveLength(before); // and edited nothing
     assertPaired(capped.messages);
+    expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
+      "daily cap of 200 decision requests reached",
+    );
   });
 
   it("leaves the request untouched when the endpoint fails", async () => {
@@ -291,6 +295,11 @@ describe("context hook", () => {
     expect(endpoint.requests).toHaveLength(1);
     expect(JSON.stringify(event.messages)).toBe(before);
     expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain("left untouched");
+
+    const counters = JSON.parse(readFileSync(join(stateDir, "stats.json"), "utf8")) as {
+      failures?: number;
+    };
+    expect(counters.failures).toBe(1);
   });
 
   it("makes no new request for known calls but re-applies the memo", async () => {
