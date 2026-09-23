@@ -1,15 +1,15 @@
 # fast-opencode-compaction
 
-An **opencode V2 adapter for [`fast-jev-compaction`](https://www.npmjs.com/package/fast-jev-compaction)**.
+An **OpenCode V2 adapter for [`fast-jev-compaction`](https://www.npmjs.com/package/fast-jev-compaction)**.
 
 The algorithm is the library's: token estimation, state fitting, batching, the two typed questions per
-tool call, and the keep/drop/truncate decisions. This repo is the opencode integration — it maps
-opencode V2 messages to the library's message model, hooks `ctx.session.hook("context")`, applies the
+tool call, and the keep/drop/truncate decisions. This repo is the OpenCode integration - it maps
+OpenCode V2 messages to the library's message model, hooks `ctx.session.hook("context")`, applies the
 decisions to the outgoing request, and configures the decision endpoint.
 
 ## What this adapter adds
 
-| | `fast-jev-compaction` (Claude Code plugin) | this adapter (opencode V2) |
+| | `fast-jev-compaction` (Claude Code plugin) | this adapter (OpenCode V2) |
 | --- | --- | --- |
 | Hook | `session.compact`, returning replacement messages | `ctx.session.hook("context")`, once per model call |
 | Effect | replaces the compaction result | prunes the outgoing request; the session is never modified |
@@ -17,7 +17,7 @@ decisions to the outgoing request, and configures the decision endpoint.
 | Providers | TypeSafe only (`TYPESAFE_API_KEY` or macOS keychain) | `typesafe`, `zen`, `openrouter`, `vercel`, `custom`; key from `apiKey` / `apiKeyEnv` / `apiKeyCommand` |
 | Budgets | `maxStateTokens` | per provider, plus `thresholdTokens` (when to engage) and `keepThreshold` |
 | Telemetry | none | `ledger.jsonl` + `stats.json` with `byProvider` buckets and re-run attribution |
-| opencode 1.x | n/a | not supported — the V2 hook API does not exist there |
+| OpenCode 1.x | n/a | not supported - the V2 hook API does not exist there |
 
 The wire contract it speaks is [PROTOCOL.md](./PROTOCOL.md); the decision behaviour is the library's,
 so its documentation applies.
@@ -59,7 +59,7 @@ Local-model recipe (a Laya bridge): [docs/configuration.md#custom-a-local-laya-b
 ## Cost & latency
 
 Every request above `thresholdTokens` that has tool calls the plugin has not decided on yet pays one
-serial round-trip to the decision endpoint inside the hook — bounded by `timeoutMs` (default 20 s) —
+serial round-trip to the decision endpoint inside the hook - bounded by `timeoutMs` (default 20 s) —
 and prompt caching breaks from the first drop. That trade-off is what the ledger measures:
 `tokensSaved` versus `rerunAfter*`.
 
@@ -71,7 +71,7 @@ One JSONL line per run that changed the request:
 tail -1 ~/.local/share/opencode/fast-opencode-compaction/ledger.jsonl
 ```
 
-Counts and lengths only — no message text, no tool results, no keys. `rerunAfterDrop / dropped` is the
+Counts and lengths only - no message text, no tool results, no keys. `rerunAfterDrop / dropped` is the
 quality signal: high means it is pruning things the model needed. `stats.json` groups the same
 counters per `"<provider>:<model>"` in `byProvider`.
 
@@ -84,4 +84,4 @@ npm run typecheck
 
 ## License
 
-MIT — see [LICENSE](./LICENSE) and [NOTICE](./NOTICE) for the algorithm's attribution.
+MIT - see [LICENSE](./LICENSE) and [NOTICE](./NOTICE) for the algorithm's attribution.
