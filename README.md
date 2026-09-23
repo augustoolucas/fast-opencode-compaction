@@ -9,7 +9,7 @@ decisions to the outgoing request, and configures the decision endpoint.
 
 ## What this adapter adds
 
-| | `fast-jev-compaction` (Claude Code plugin) | this adapter (OpenCode V2) |
+| | `fast-jev-compaction` | `fast-opencode-compaction` |
 | --- | --- | --- |
 | Hook | `session.compact`, returning replacement messages | `ctx.session.hook("context")`, once per model call |
 | Effect | replaces the compaction result | prunes the outgoing request; the session is never modified |
@@ -59,7 +59,7 @@ Local-model recipe (a Laya bridge): [docs/configuration.md#custom-a-local-laya-b
 ## Cost & latency
 
 Every request above `thresholdTokens` that has tool calls the plugin has not decided on yet pays one
-serial round-trip to the decision endpoint inside the hook - bounded by `timeoutMs` (default 20 s) —
+serial round-trip to the decision endpoint inside the hook - bounded by `timeoutMs` (default 20 s) -
 and prompt caching breaks from the first drop. That trade-off is what the ledger measures:
 `tokensSaved` versus `rerunAfter*`.
 
